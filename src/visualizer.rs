@@ -65,6 +65,7 @@ impl Visualizer {
             patched: bool,
             colour: (f32, f32, f32),
             level: f32,
+            mover: bool,
         }
         let steel = Color32::from_rgb(46, 49, 60);
         let mut fixtures = Vec::new();
@@ -93,6 +94,7 @@ impl Visualizer {
                         pos,
                         scale,
                         patched: false,
+                        mover: false,
                         colour: (0.0, 0.0, 0.0),
                         level: 0.0,
                     });
@@ -106,13 +108,19 @@ impl Visualizer {
                     level = 0.0;
                 }
                 let colour = (a.colour.r, a.colour.g, a.colour.b);
-                let u = ((x - w / 2.0) / (w / 2.0)) * 0.85;
+                let mut u = ((x - w / 2.0) / (w / 2.0)) * 0.85;
+                let mut v = aim_v;
+                // Moving heads aim by pan (sideways) and tilt (up/downstage).
+                if let Some((pan, tilt)) = a.position {
+                    u = (u + (pan - 0.5) * 2.6).clamp(-1.3, 1.3);
+                    v = (aim_v + (tilt - 0.5) * 1.6).clamp(-0.15, 1.1);
+                }
                 if level > 0.002 {
                     let spread = (0.07 + a.zoom * 0.14) * scale;
                     self.beam(
                         &p,
                         pos + vec2(0.0, 6.0 * scale),
-                        floor(u, aim_v),
+                        floor(u, v),
                         w * spread,
                         colour,
                         level,
@@ -122,6 +130,7 @@ impl Visualizer {
                     ch,
                     pos,
                     scale,
+                    mover: a.position.is_some(),
                     patched: true,
                     colour,
                     level,
@@ -136,11 +145,21 @@ impl Visualizer {
                 Color32::from_rgb(28, 30, 38)
             };
             let s = fx.scale;
-            p.rect_filled(
-                Rect::from_center_size(fx.pos + vec2(0.0, 3.0 * s), vec2(20.0, 20.0) * s),
-                3.0,
-                body,
-            );
+            if fx.mover {
+                // Yoke and round head.
+                p.rect_filled(
+                    Rect::from_center_size(fx.pos + vec2(0.0, -3.0 * s), vec2(24.0, 6.0) * s),
+                    1.0,
+                    body,
+                );
+                p.circle_filled(fx.pos + vec2(0.0, 6.0 * s), 11.0 * s, body);
+            } else {
+                p.rect_filled(
+                    Rect::from_center_size(fx.pos + vec2(0.0, 3.0 * s), vec2(20.0, 20.0) * s),
+                    3.0,
+                    body,
+                );
+            }
             let lens = if fx.level > 0.002 {
                 let (r, g, b) = fx.colour;
                 let c = |x: f32| (40.0 + x * fx.level * 215.0) as u8;

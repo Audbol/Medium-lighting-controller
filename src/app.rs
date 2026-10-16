@@ -89,6 +89,7 @@ pub(crate) enum ColourTab {
     Swatches,
     Picker,
     Sliders,
+    Library,
     Patterns,
     Chases,
 }
@@ -136,6 +137,7 @@ pub struct App {
     prev_screen: Screen,
     tab: usize,
     colour_tab: ColourTab,
+    swatch_page: usize,
     pattern_page: usize,
     chase_page: usize,
     picker: Rgb,
@@ -148,6 +150,9 @@ pub struct App {
     patch_sel: usize,
     patch_clip: Option<Patched>,
     lib_sel: Option<usize>,
+    browser: screens::Browser,
+    browse_patch: bool,
+    import_path: String,
     wizard: Wizard,
     editor: Option<Editor>,
     show_name: String,
@@ -236,6 +241,7 @@ impl App {
             prev_screen: Screen::Home,
             tab: 0,
             colour_tab: ColourTab::Swatches,
+            swatch_page: 0,
             pattern_page: 0,
             chase_page: 0,
             picker: Rgb::new(1.0, 0.0, 0.0),
@@ -248,6 +254,9 @@ impl App {
             patch_sel: 0,
             patch_clip: None,
             lib_sel: None,
+            browser: screens::Browser::default(),
+            browse_patch: false,
+            import_path: String::new(),
             wizard: Wizard {
                 fixture: 0,
                 quantity: 1,
@@ -410,6 +419,9 @@ impl App {
             }
             if i.key_pressed(Key::M) {
                 d.beat();
+            }
+            if i.key_pressed(Key::P) {
+                d.position = !d.position;
             }
             if i.key_pressed(Key::Tab) {
                 d.press_page();

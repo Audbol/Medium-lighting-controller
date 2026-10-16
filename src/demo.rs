@@ -1,27 +1,28 @@
 //! The show loaded on first run: a mixed LED rig patched across both fixture
-//! pages, with a few scenes, chases and a short cuelist to play with.
+//! pages (Shehds RGBWA+UV pars and 7x40W moving heads up front), with a few
+//! scenes, chases and a short cuelist to play with.
 
 use crate::colour::{Hs, Rgb};
 use crate::effects::{self, ColourChase, Pattern};
 use crate::engine::{CHANNELS, Cell, Cue, CueStart, Item, Look, Scene, Show, empty_look};
-use crate::fixtures::{Patched, generic};
+use crate::fixtures::{Patched, find};
 
-/// (fixture type, channels it's patched to)
-const RIG: [(&str, std::ops::Range<usize>); 7] = [
-    ("IRGBW", 0..8),
-    ("RGBSZ", 8..10),
-    ("I CW/WW", 10..12),
-    ("RGB", 12..20),
-    ("RGBAW", 20..22),
-    ("Dimmer", 22..23),
-    ("Strobe (I Rate)", 23..24),
+/// (manufacturer, fixture type, channels it's patched to)
+const RIG: [(&str, &str, std::ops::Range<usize>); 7] = [
+    ("Shehds", "LED Par 18x18W · 10ch", 0..8),
+    ("Shehds", "7x40W Bee Eye Zoom Wash · 15ch", 8..10),
+    ("Generic", "I CW/WW", 10..12),
+    ("Generic", "RGB", 12..20),
+    ("Generic", "RGBAW", 20..22),
+    ("Generic", "Dimmer", 22..23),
+    ("Generic", "Strobe (I Rate)", 23..24),
 ];
 
 pub fn demo_patch() -> Vec<Option<Patched>> {
     let mut patch = vec![None; CHANNELS];
     let mut address = 1u16;
-    for (name, chans) in RIG {
-        let def = generic(name);
+    for (maker, name, chans) in RIG {
+        let def = find(maker, name).expect("demo fixture in the library");
         for ch in chans {
             let n = def.footprint();
             patch[ch] = Some(Patched {
@@ -41,7 +42,7 @@ fn look(chans: impl IntoIterator<Item = usize>, f: impl Fn(usize, usize) -> (f32
         l[ch] = Cell {
             level: Some(level),
             colour: Some(c.hs()),
-            alt: [None, None],
+            ..Default::default()
         };
     }
     l
@@ -81,7 +82,7 @@ pub fn demo_show() -> Show {
         Some(4.0),
     );
     show.scenes[2] = scene("Red & Blue", pattern(Pattern::OddEven(0), 0..8, 1.0), None);
-    show.scenes[3] = scene("Rainbow", pattern(Pattern::Rainbow, 12..20, 1.0), None);
+    show.scenes[3] = scene("Rainbow", pattern(Pattern::Special(0), 12..20, 1.0), None);
 
     // C1: a dot of white running along the battens (an auto chase).
     let dot = look(12..20, |j, _| {
@@ -124,7 +125,7 @@ pub fn demo_show() -> Show {
     // Yellow scene page: one fader per look.
     show.faders[0][0] = scene("Front warm", look(0..8, |_, _| (1.0, warm)), None);
     show.faders[0][1] = scene(
-        "Washes cyan",
+        "Movers cyan",
         look(8..10, |_, _| (1.0, Hs::new(0.5, 1.0).rgb())),
         None,
     );
@@ -136,6 +137,40 @@ pub fn demo_show() -> Show {
     );
     show.faders[0][4] = scene("Crossfade", pattern(Pattern::Crossfade(6), 0..8, 1.0), None);
     show.faders[0][11] = scene("Strobe", look(23..24, |_, _| (1.0, Rgb::WHITE)), None);
+
+    // Moving heads: a figure-eight sweep, and a look aimed at the audience.
+    let sweep = (0..8)
+        .map(|k| {
+            let a = k as f32 / 8.0 * std::f32::consts::TAU;
+            let mut step = empty_look();
+            for (j, ch) in (8..10).enumerate() {
+                let dir = if j == 0 { 1.0 } else { -1.0 };
+                step[ch].pos = [
+                    Some(0.5 + 0.18 * a.sin() * dir),
+                    Some(0.5 + 0.15 * (2.0 * a).sin()),
+                ];
+            }
+            step
+        })
+        .collect();
+    let mut mover_chase = effects::build_chase(ColourChase::Special(0), &[]);
+    mover_chase.name = "Mover sweep".into();
+    mover_chase.steps = sweep;
+    mover_chase.bpm = 60.0;
+    mover_chase.crossfade = crate::engine::Crossfade::Full;
+    show.faders[0][5] = Some(Item::Chase(mover_chase));
+    let mut audience = look(8..10, |_, _| (1.0, Rgb::new(1.0, 0.85, 0.6)));
+    for (j, ch) in (8..10).enumerate() {
+        audience[ch].pos = [Some(if j == 0 { 0.45 } else { 0.55 }), Some(0.85)];
+        audience[ch].alt[0] = Some(1.0); // wide zoom
+    }
+    show.faders[0][6] = scene("Movers to audience", audience, None);
+    // UV: the Shehds pars' UV LEDs are on Shift+Hue.
+    let mut blacklight = look(0..8, |_, _| (1.0, Hs::new(0.72, 1.0).rgb()));
+    for cell in blacklight.iter_mut().take(8) {
+        cell.alt[0] = Some(1.0);
+    }
+    show.faders[0][7] = scene("Blacklight", blacklight, None);
 
     let cue = |name: &str, look: Look, fade: Option<f32>, start: CueStart, wait: f32| Cue {
         name: name.into(),

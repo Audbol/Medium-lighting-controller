@@ -46,11 +46,23 @@ pub struct Cell {
     /// Shift+Hue and Shift+Saturation features (zoom and strobe by default).
     #[serde(default)]
     pub alt: [Option<f32>; 2],
+    /// Position+Hue and Position+Saturation (pan and tilt by default).
+    #[serde(default, skip_serializing_if = "none2")]
+    pub pos: [Option<f32>; 2],
+}
+
+fn none2(v: &[Option<f32>; 2]) -> bool {
+    v.iter().all(Option::is_none)
 }
 
 impl Cell {
     pub fn is_empty(&self) -> bool {
-        self.level.is_none() && self.colour.is_none() && self.alt.iter().all(Option::is_none)
+        self.level.is_none() && self.colour.is_none() && none2(&self.alt) && none2(&self.pos)
+    }
+
+    /// The four dial features: Shift+Hue, Shift+Sat, Position+Hue, Position+Sat.
+    fn features(&self) -> [Option<f32>; 4] {
+        [self.alt[0], self.alt[1], self.pos[0], self.pos[1]]
     }
 
     pub fn lerp(a: &Cell, b: &Cell, t: f32) -> Cell {
@@ -69,6 +81,7 @@ impl Cell {
                 (x, y) => y.or(x),
             },
             alt: [num(a.alt[0], b.alt[0]), num(a.alt[1], b.alt[1])],
+            pos: [num(a.pos[0], b.pos[0]), num(a.pos[1], b.pos[1])],
         }
     }
 }
@@ -279,8 +292,12 @@ impl Show {
         for page in &mut self.faders {
             page.resize(STRIPS, None);
         }
+        // Older shows had one page of swatches: keep theirs, add the new pages.
         if self.swatches.len() != effects::SWATCHES {
-            self.swatches = effects::DEFAULT_SWATCHES.to_vec();
+            let n = self.swatches.len().min(effects::SWATCHES);
+            self.swatches.truncate(n);
+            self.swatches
+                .extend_from_slice(&effects::DEFAULT_SWATCHES[n..]);
         }
     }
 
@@ -363,6 +380,7 @@ pub struct ChannelOut {
     pub hs: Hs,
     pub rgb: Rgb,
     pub alt: [Option<f32>; 2],
+    pub pos: [Option<f32>; 2],
 }
 
 impl Default for ChannelOut {
@@ -373,6 +391,7 @@ impl Default for ChannelOut {
             hs: WHITE,
             rgb: Rgb::WHITE,
             alt: [None, None],
+            pos: [None, None],
         }
     }
 }
@@ -389,6 +408,7 @@ impl ChannelOut {
             hs: a.hs.lerp(b.hs, t),
             rgb: a.rgb.lerp(b.rgb, t),
             alt: [num(a.alt[0], b.alt[0]), num(a.alt[1], b.alt[1])],
+            pos: [num(a.pos[0], b.pos[0]), num(a.pos[1], b.pos[1])],
         }
     }
 }
@@ -586,6 +606,7 @@ fn chase_look(chase: &Chase, clock: &ChaseClock, t: f64, step_seconds: f64) -> L
         for c in look.iter_mut() {
             c.colour = None;
             c.alt = [None, None];
+            c.pos = [None, None];
         }
     }
     look
@@ -612,8 +633,9 @@ pub struct Programmer {
     pub level: [f32; CHANNELS],
     pub colour: [Option<Hs>; CHANNELS],
     colour_stamp: [u64; CHANNELS],
-    pub alt: [[Option<f32>; 2]; CHANNELS],
-    alt_stamp: [[u64; 2]; CHANNELS],
+    /// Dial features per channel: Shift+Hue, Shift+Sat, Position+Hue, Position+Sat.
+    pub alt: [[Option<f32>; 4]; CHANNELS],
+    alt_stamp: [[u64; 4]; CHANNELS],
     pub selected: [bool; CHANNELS],
     /// Colour was set on this selection, so the next select starts a new one.
     selection_used: bool,
@@ -756,6 +778,8 @@ pub struct Desk {
     pub tap_bpm: Option<f32>,
     taps: Vec<f64>,
     pub shift: bool,
+    /// Position mode: the dials drive pan (Hue) and tilt (Saturation).
+    pub position: bool,
     /// Double-tapped Shift: dials fan across the selection.
     pub fan: bool,
     pub record: bool,
@@ -814,6 +838,7 @@ impl Desk {
             tap_bpm: None,
             taps: Vec::new(),
             shift: false,
+            position: false,
             fan: false,
             record: false,
             record_include: [false; CHANNELS],
@@ -849,6 +874,31 @@ impl Desk {
 
     pub fn alt_home(&self, ch: usize, alt: usize) -> f32 {
         self.show.patched(ch).map_or(0.0, |p| p.def.alt_home(alt))
+    }
+
+    pub fn pos_home(&self, ch: usize, i: usize) -> f32 {
+        self.show.patched(ch).map_or(0.5, |p| p.def.pos_home(i))
+    }
+
+    /// Home value of dial feature `k` (0-1 Shift, 2-3 Position).
+    fn feature_home(&self, ch: usize, k: usize) -> f32 {
+        if k < 2 {
+            self.alt_home(ch, k)
+        } else {
+            self.pos_home(ch, k - 2)
+        }
+    }
+
+    /// Which dial feature a dial drives now: Position wins over Shift.
+    fn dial_feature(&self, dial: DialKind) -> Option<usize> {
+        let k = if dial == DialKind::Hue { 0 } else { 1 };
+        if self.position {
+            Some(2 + k)
+        } else if self.shift {
+            Some(k)
+        } else {
+            None
+        }
     }
 
     pub fn patched_channels(&self) -> Vec<usize> {
@@ -954,10 +1004,12 @@ impl Desk {
         self.prog.colour[ch].unwrap_or(self.live[ch].hs)
     }
 
-    fn base_alt(&self, ch: usize, a: usize) -> f32 {
-        self.prog.alt[ch][a]
-            .or(self.live[ch].alt[a])
-            .unwrap_or_else(|| self.alt_home(ch, a))
+    fn base_alt(&self, ch: usize, k: usize) -> f32 {
+        let live = &self.live[ch];
+        let live = if k < 2 { live.alt[k] } else { live.pos[k - 2] };
+        self.prog.alt[ch][k]
+            .or(live)
+            .unwrap_or_else(|| self.feature_home(ch, k))
     }
 
     fn set_colour(&mut self, ch: usize, c: Hs, stamp: u64) {
@@ -971,12 +1023,11 @@ impl Desk {
     }
 
     /// Turning a dial: `delta` is in turns (1.0 = full range). With Shift it
-    /// drives the strip's alternate feature instead.
+    /// drives the strip's alternate feature instead, in Position mode pan/tilt.
     pub fn turn_dial(&mut self, ch: usize, dial: DialKind, delta: f32) {
         let targets = self.dial_targets(ch, self.fan);
         let stamp = self.next_stamp();
-        if self.shift {
-            let a = if dial == DialKind::Hue { 0 } else { 1 };
+        if let Some(a) = self.dial_feature(dial) {
             for &(c, w) in &targets {
                 let v = self.base_alt(c, a) + delta * w;
                 self.set_alt(c, a, v, stamp);
@@ -1002,15 +1053,16 @@ impl Desk {
     }
 
     /// Pressing a dial: Hue steps through six colours at full saturation,
-    /// Saturation (and Shift + either) goes full → 50% → 0%.
+    /// Saturation (and Shift + either) goes full → 50% → 0%. In Position mode a
+    /// press sends the fixture back to its home position.
     pub fn press_dial(&mut self, ch: usize, dial: DialKind) {
         self.checkpoint();
         let targets = self.dial_targets(ch, false);
         let stamp = self.next_stamp();
-        if self.shift {
-            let a = if dial == DialKind::Hue { 0 } else { 1 };
+        if let Some(a) = self.dial_feature(dial) {
             let v = next_press_level(self.base_alt(ch, a));
             for &(c, _) in &targets {
+                let v = if a >= 2 { self.feature_home(c, a) } else { v };
                 self.set_alt(c, a, v, stamp);
             }
         } else {
@@ -1619,6 +1671,7 @@ impl Desk {
                     level: Some(o.level),
                     colour: Some(o.hs),
                     alt: o.alt,
+                    pos: o.pos,
                 }
             } else {
                 Cell::default()
@@ -1957,15 +2010,15 @@ impl Desk {
         std::array::from_fn(|ch| {
             let hs = look[ch].colour.unwrap_or(WHITE);
             ChannelOut {
+                // Intensity chases bring their own levels; colour chases run at full.
                 level: if self.show.patched(ch).is_some() {
-                    1.0
+                    look[ch].level.unwrap_or(1.0)
                 } else {
                     0.0
                 },
-                intensity: 0.0,
                 hs,
                 rgb: hs.rgb(),
-                alt: [None, None],
+                ..Default::default()
             }
         })
     }
@@ -2024,7 +2077,7 @@ impl Desk {
             let flashed = self.flash.contains(&Some(Flash::Channel(ch)));
             let mut level = if flashed { 1.0 } else { self.prog.level[ch] } * self.fixture_master;
             let mut colours: Vec<(u64, f32, Hs)> = Vec::new();
-            let mut alts: [Vec<(u64, f32, f32)>; 2] = [Vec::new(), Vec::new()];
+            let mut alts: [Vec<(u64, f32, f32)>; 4] = Default::default();
             if let Some(c) = self.prog.colour[ch] {
                 colours.push((self.prog.colour_stamp[ch], 1.0, c));
             }
@@ -2041,7 +2094,7 @@ impl Desk {
                 if let Some(c) = cell.colour {
                     colours.push((s.stamp, s.fade, c));
                 }
-                for (list, v) in alts.iter_mut().zip(cell.alt) {
+                for (list, v) in alts.iter_mut().zip(cell.features()) {
                     if let Some(v) = v {
                         list.push((s.stamp, s.fade, v));
                     }
@@ -2055,7 +2108,7 @@ impl Desk {
                     (base.lerp(top.2, top.1), base.rgb().lerp(top.2.rgb(), top.1))
                 }
             };
-            let alt = std::array::from_fn(|a| {
+            let feature: [Option<f32>; 4] = std::array::from_fn(|a| {
                 alts[a].sort_by_key(|x| std::cmp::Reverse(x.0));
                 match alts[a].as_slice() {
                     [] => None,
@@ -2070,7 +2123,8 @@ impl Desk {
                 intensity: 0.0,
                 hs,
                 rgb,
-                alt,
+                alt: [feature[0], feature[1]],
+                pos: [feature[2], feature[3]],
             }
         })
     }
@@ -2236,7 +2290,7 @@ mod tests {
             look[0] = Cell {
                 level: Some(1.0),
                 colour: Some(c),
-                alt: [None, None],
+                ..Default::default()
             };
             Some(Item::Scene(Scene {
                 name: "x".into(),
@@ -2497,7 +2551,7 @@ mod tests {
         assert_eq!(d.out[4].rgb.to_u8(), [255, 0, 0]);
         assert_eq!(d.out[5].rgb.to_u8(), [0, 0, 255]);
         d.clear_selection();
-        assert!(!d.apply_pattern(Pattern::Rainbow));
+        assert!(!d.apply_pattern(Pattern::Special(0)));
     }
 
     #[test]
@@ -2568,6 +2622,88 @@ mod tests {
         d.tick(0.1);
         assert_eq!(d.dmx[4], 255);
         assert_eq!(d.dmx[5], 128);
+    }
+
+    fn movers() -> Desk {
+        let mut show = Show::default();
+        for ch in 0..4 {
+            show.patch[ch] = Some(Patched {
+                def: generic("Moving head wash RGBW (9ch)"),
+                addresses: vec![ch as u16 * 9 + 1],
+            });
+        }
+        let mut d = Desk::new(show, Prefs::default());
+        d.tick(0.0);
+        d
+    }
+
+    #[test]
+    fn position_mode_moves_pan_and_tilt() {
+        let mut d = movers();
+        d.move_fader(0, 1.0);
+        d.tick(0.1);
+        assert_eq!(&d.dmx[0..2], &[128, 128]); // parked centre
+        d.position = true;
+        d.turn_dial(0, DialKind::Hue, 0.25); // pan
+        d.turn_dial(0, DialKind::Sat, -0.5); // tilt
+        d.tick(0.2);
+        assert_eq!(d.dmx[0], 192);
+        assert_eq!(d.dmx[1], 0);
+        // Colour still comes from the colour dials.
+        d.position = false;
+        d.turn_dial(0, DialKind::Sat, 1.0);
+        d.tick(0.3);
+        assert_eq!(&d.dmx[0..2], &[192, 0]);
+        // Pressing a dial in Position mode re-homes it.
+        d.position = true;
+        d.press_dial(0, DialKind::Hue);
+        d.tick(0.4);
+        assert_eq!(d.dmx[0], 128);
+    }
+
+    #[test]
+    fn position_fans_and_records() {
+        let mut d = movers();
+        select(&mut d, &[0, 1, 2, 3]);
+        d.position = true;
+        d.fan = true;
+        for ch in 0..4 {
+            d.prog.alt[ch][2] = Some(0.0);
+        }
+        d.turn_dial(0, DialKind::Hue, 0.9);
+        let pans: Vec<f32> = (0..4).map(|c| d.prog.alt[c][2].unwrap()).collect();
+        assert!((pans[0] - 0.9).abs() < 1e-6 && (pans[1] - 0.6).abs() < 1e-6);
+        assert_eq!(pans[3], 0.0);
+        d.fan = false;
+        d.position = false;
+        for s in 0..4 {
+            d.move_fader(s, 1.0);
+        }
+        d.tick(0.1);
+        record_scene(&mut d, Slot::Scene(0));
+        let Some(Item::Scene(scene)) = d.show.item(Slot::Scene(0)) else {
+            panic!()
+        };
+        assert!((scene.look[0].pos[0].unwrap() - 0.9).abs() < 1e-6);
+        // Played back over a cleared programmer, the scene sets the position.
+        d.press_clear(3);
+        d.live_fade = 0.0;
+        if let Some(Item::Scene(s)) = d.show.scenes[0].as_mut() {
+            s.fade = Some(0.0);
+        }
+        d.toggle_slot(Slot::Scene(0));
+        d.tick(0.2);
+        assert!((229..=230).contains(&d.dmx[0]), "{}", d.dmx[0]);
+    }
+
+    #[test]
+    fn old_show_files_without_position_still_load() {
+        let json = r#"{"level":1.0,"colour":{"h":0.5,"s":1.0},"alt":[null,0.5]}"#;
+        let c: Cell = serde_json::from_str(json).unwrap();
+        assert_eq!(c.pos, [None, None]);
+        assert_eq!(c.alt[1], Some(0.5));
+        // And empty position isn't written out.
+        assert!(!serde_json::to_string(&c).unwrap().contains("pos"));
     }
 
     #[test]

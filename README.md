@@ -8,16 +8,17 @@ A desktop lighting console, written in Rust, that works like a **Jands Stage CL*
 |---|---|---|
 | Fixture channels | 12 HSI strips × 2 pages (Black 1-12, White 13-24) | same |
 | Per strip | fader, flash, select, Hue and Saturation dials, colour mimic | same; drag a dial to turn it, click to press it |
+| Moving heads | (not on the Stage CL) | **POSITION** turns the dials into pan and tilt, with fan, record and LTP |
 | Shift | Shift + dials drive two more features (zoom, strobe…) | same; double-click SHIFT to fan across the selection |
 | Scene mode | 12 faders play up to 6 pages of scenes or chases | same (pages: Yellow, Red, Green, Blue, Magenta, Cyan) |
 | Playbacks | 4 Scene buttons, 4 Chase buttons, a Cuelist, each with a master | same |
 | Precedence | intensity HTP, colour LTP | same, with LTP colour crossfades |
 | Programming | Record, Clear (1/2/3 presses), Undo, Snapshot, fader gating | same |
-| Colour window | 18 swatches, picker, RGB sliders, 3 pattern pages, 4 colour-chase pages | same |
+| Colour window | 18 swatches, picker, RGB sliders, 3 pattern pages, 4 colour-chase pages | 54 swatches on 3 pages, picker, RGB sliders, a library of 80+ named colours, 10 pattern pages (180 patterns), 12 chase pages (216 chases, including intensity effects) |
 | Chases | BPM, direction, mirror, crossfade, intensity-only filter, audio | same, plus Auto chase from a look |
 | Cuelist | Play, Back, Pause, Release; Halt/Follow, wait, fade | same, plus Jump, skip, copy/insert/update |
 | Masters | GM, DBO, fade time dial, chase rate dial with tap sync | same |
-| Fixture library | Intensity, R G B A W, CW/WW, CT, CMY, Strobe, Zoom, custom, 16-bit, multipatch | same, with a fixture editor |
+| Fixture library | Intensity, R G B A W, CW/WW, CT, CMY, Strobe, Zoom, custom, 16-bit, multipatch | same, plus UV, pan/tilt and P/T speed; about 630 searchable fixture modes from Shehds, Chauvet DJ, ADJ, Cameo, Eurolite, Stairville, Showtec, Varytec and more; Open Fixture Library import; a fixture editor |
 | Output | 1 universe: DMX, Art-Net, sACN | Art-Net (with node discovery), sACN, ENTTEC USB Pro |
 | Autopilot, Lock | yes | yes |
 
@@ -25,18 +26,19 @@ A desktop lighting console, written in Rust, that works like a **Jands Stage CL*
 
 The window has the **touchscreen** on the left, the **stage** in the middle and the **front panel** along the bottom.
 
-1. **Patch** (Patch window): give each fixture channel a fixture type and DMX address. The **Wizard** patches a row of identical fixtures; **&** (multipatch) puts more fixtures on one channel. Build your own fixture types in **Library**.
+1. **Patch** (Patch window): give each fixture channel a fixture type and DMX address. **Choose fixture…** opens a searchable list (by maker, name or channels, e.g. `shehds 7x18`, `rgbwa`, `moving`). The **Wizard** patches a row of identical fixtures; **&** (multipatch) puts more fixtures on one channel. Build or import your own fixture types in **Library** (see [Fixture library](#fixture-library)).
 2. **Make a look**: raise faders, then turn the **Hue** and **Saturation** dials. Select several fixtures (SELECT, Ctrl+click for a range, or click them on stage) and any one of their dials changes them all. Clicking Hue steps through six colours; clicking Saturation goes full → 50% → white. With **SHIFT**, the dials set zoom and strobe.
-3. **Colour window**: apply swatches, a picked colour, two-colour patterns (odds & evens, half & half, crossfade, rainbow) or colour chases (rainbow, fire, water, twinkle, police…) to the selection.
-4. **Record**: press **RECORD** (lit channels are included; SELECT toggles them), then:
+3. **Colour window**: apply swatches, a picked colour, a named colour from the **Library** (Congo Blue, Bastard Amber, Tungsten 3200K…), patterns (odds & evens, half & half, crossfades, gradients, thirds, rainbows, fire, ocean, aurora…) or chases (rainbow, fire, water, twinkle, police, colour wipe, ripple, Christmas, galaxy…) to the selection. The **Intensity** chase page (comet, Knight Rider, pulse, breathe, flicker, lightning, fill & empty…) runs the selection's levels instead of its colour.
+4. **Moving heads**: press **POSITION** (or `P`) and the dials pan (Hue) and tilt (Saturation) the strip's fixture, or the whole selection. Click a dial to re-home it; double-click SHIFT first to fan a row of movers. Positions are recorded into scenes, chases and cues, and are Latest Takes Precedence like colour.
+5. **Record**: press **RECORD** (lit channels are included; SELECT toggles them), then:
    * a **Scene** button: stores a scene.
    * a **Chase** button: **Auto** builds a chase that walks the look along the included channels; **Manual** adds the look as a step.
    * a **FLASH** button: stores a scene on that fader in the current scene page.
    * the Cuelist **PLAY** button: adds a cue.
 
    While a chase is playing, recording can copy it to another button instead.
-5. **Play**: Scene and Chase buttons toggle (the LED flashes while playing) and their faders are masters. **FIXTURES/SCENES** turns the 12 faders into scene submasters; **PAGE** changes the page. The cuelist has PLAY / BACK / PAUSE / RELEASE.
-6. **Clear**: click to set the selection to white, double-click for everything, triple-click to clear all intensity and colour. **SHIFT + CLEAR** resets the panel. **UNDO** reverts the last change.
+6. **Play**: Scene and Chase buttons toggle (the LED flashes while playing) and their faders are masters. **FIXTURES/SCENES** turns the 12 faders into scene submasters; **PAGE** changes the page. The cuelist has PLAY / BACK / PAUSE / RELEASE.
+7. **Clear**: click to set the selection to white, double-click for everything, triple-click to clear all intensity and colour. **SHIFT + CLEAR** resets the panel. **UNDO** reverts the last change.
 
 A fader with a **red cap** is *gated*: its position doesn't match the level it controls (after a page change or Clear). Move it to the output level, shown behind the fader, to take control.
 
@@ -44,7 +46,27 @@ A fader with a **red cap** is *gated*: its position doesn't match the level it c
 
 Right-click a Scene or Chase button to release, edit or delete it. **Autopilot** (top of the touchscreen) plays every built-in colour chase on the whole rig for unattended use, and **Lock** protects the console with a passcode.
 
-Keys: `Space` cuelist go · `R` record · `Esc` cancel · `Ctrl+Z` undo · `S` snapshot · `T` sync · `M` beat · `Tab` page · `1`-`4` scenes · `5`-`8` chases · hold `B` blackout · hold `Shift` for Shift.
+Keys: `Space` cuelist go · `R` record · `Esc` cancel · `Ctrl+Z` undo · `S` snapshot · `T` sync · `M` beat · `P` position · `Tab` page · `1`-`4` scenes · `5`-`8` chases · hold `B` blackout · hold `Shift` for Shift.
+
+## Fixture library
+
+About 630 fixture modes, searchable in the Patch window:
+
+* **Generic**: dimmers, RGB / RGBA / RGBW / RGBAW / RGBWA+UV in common channel layouts, CW/WW and CT whites, CMY, strobes, UV bars, 16-bit versions, and generic moving-head wash and spot layouts.
+* **Shehds** (14 modes): LED Par 18x18W RGBWA+UV (6/10ch), LED Flat Par 18x18W (6/10ch), LED Flat Par 7x18W RGBWA+UV (6/9/10ch), LED Flat Par 54x3W, LED Flat Par 12x3W RGBW, 18x12W RGBW Par (4/8ch), LED Spot 60W moving head (9/11ch), and the 7x40W Bee Eye zoom wash moving head (15ch).
+* **Chauvet DJ, American DJ, Cameo, Eurolite, Stairville, Showtec, Varytec, U'King, Betopper, BeamZ**: their LED pars, washes, bars, strobes, blinders and moving heads.
+
+Each fixture channel maps to something the console drives: intensity, the colour emitters (red, green, blue, amber, white, cool/warm white, cyan/magenta/yellow), UV and strobe and zoom (Shift dials), pan and tilt (Position dials), or colour temperature. Anything else, like macros, programs, gobo and colour wheels, or reset, sits at a safe value: the channel's default, or the start of its "no function" range. Change that in the fixture editor if you want something else.
+
+Most profiles come from the [Open Fixture Library](https://open-fixture-library.org) (MIT licence, see [NOTICE.md](NOTICE.md)). The Shehds 7x40W was typed in from its manual. Shehds sells several fixtures with similar names and different channel layouts, so **check a profile against your fixture's manual** (its DMX chart) before a show.
+
+**Your own fixtures:** in **Patch → Library** you can **Copy** a fixture and **Edit** it, start a **New** one, or **Import** a fixture `.json` downloaded from the Open Fixture Library. Each DMX mode becomes a fixture in *My Fixtures*, saved with the show.
+
+To rebuild the bundled set from a newer Open Fixture Library checkout:
+
+```sh
+OFL_DIR=/path/to/open-fixture-library cargo test regenerate_bundled -- --ignored
+```
 
 ## Output
 
@@ -60,7 +82,7 @@ Output runs on its own thread, so playback continues when the window is minimise
 
 Shows are JSON files (`*.show.json`) holding the patch, your fixture types, swatches, scenes, chases and cuelist. Without a path argument the show is `default.show.json` in your user data folder: `%APPDATA%\Stage-Lite` (Windows), `~/Library/Application Support/Stage-Lite` (macOS) or `~/.local/share/stage-lite` (Linux). You can also pass a path: `stage-lite myshow.show.json`. The **Shows** window saves under a new name and loads other shows from the same folder. Changes are autosaved (every 30 s by default) and on exit. Console settings (network, preferences, passcode) are kept in `settings.json` in the same folder.
 
-On first run a demo show is loaded. It has a mixed rig of IRGBW pars, RGBSZ washes, CW/WW fixtures, RGB battens, RGBAW, a dimmer and a strobe, plus a few scenes, chases and a cuelist.
+On first run a demo show is loaded. The rig has Shehds 18x18W RGBWA+UV pars, two Shehds 7x40W moving heads, CW/WW fixtures, RGB battens, RGBAW, a dimmer and a strobe. It comes with scenes, chases, a cuelist, and Yellow-page faders for a mover sweep, movers aimed at the audience and a UV blacklight look. Shows saved by earlier versions still load (older shows get the new swatch pages added).
 
 ## Download
 
@@ -96,9 +118,10 @@ On Linux, `--features audio` needs the ALSA headers (`libasound2-dev` / `alsa-li
 | File | |
 |---|---|
 | `src/engine.rs` | The console: programmer, HTP/LTP mix, fader gating, scenes, chases, cuelist, record, undo, snapshot, Autopilot. No GUI or I/O; unit tested |
-| `src/fixtures.rs` | Fixture library, colour mixing to R G B A W / CW WW / CMY, DMX rendering |
+| `src/fixtures.rs` | Fixture model and library, colour mixing to R G B A W / UV / CW WW / CMY, pan/tilt, DMX rendering |
+| `src/ofl.rs`, `assets/fixtures.json` | Open Fixture Library converter and the bundled fixtures |
 | `src/colour.rs` | Hue/saturation ↔ RGB |
-| `src/effects.rs` | Swatches, patterns and colour chases |
+| `src/effects.rs` | Swatches, colour library, patterns and chases |
 | `src/app.rs`, `src/app/panel.rs`, `src/app/screens.rs` | Window, front panel, touchscreen windows |
 | `src/visualizer.rs` | Stage view |
 | `src/output.rs` | 40 Hz output thread |

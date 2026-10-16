@@ -91,7 +91,7 @@ jobs:
         run: |
           dir=stage-lite-${{ matrix.name }}
           mkdir "$dir"
-          cp target/${{ matrix.target }}/release/stage-lite README.md \
+          cp target/${{ matrix.target }}/release/stage-lite README.md NOTICE.md \
              packaging/linux/stage-lite.desktop packaging/linux/install.sh "$dir"/
           tar czf "$dir.tar.gz" "$dir"
       - name: Package (Windows)
@@ -100,7 +100,7 @@ jobs:
         run: |
           $dir = "stage-lite-${{ matrix.name }}"
           New-Item -ItemType Directory $dir | Out-Null
-          Copy-Item target/${{ matrix.target }}/release/stage-lite.exe, README.md $dir
+          Copy-Item target/${{ matrix.target }}/release/stage-lite.exe, README.md, NOTICE.md $dir
           Compress-Archive -Path $dir -DestinationPath "$dir.zip"
 
       - uses: actions/upload-artifact@v4
@@ -140,7 +140,7 @@ jobs:
           codesign --force --deep --sign - "$app"
           mkdir stage-lite-macos-universal
           mv "$app" stage-lite-macos-universal/
-          cp README.md stage-lite-macos-universal/
+          cp README.md NOTICE.md stage-lite-macos-universal/
           ditto -c -k --keepParent stage-lite-macos-universal stage-lite-macos-universal.zip
       - uses: actions/upload-artifact@v4
         with:

@@ -1,6 +1,6 @@
 [package]
 name = "stage-lite"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "A 24-fixture HSI lighting console for LED rigs that works like a Jands Stage CL, with Art-Net, sACN and ENTTEC output"
 

@@ -20,6 +20,7 @@ mod engine;
 #[cfg(feature = "enttec")]
 mod enttec;
 mod fixtures;
+mod ofl;
 mod output;
 mod sacn;
 mod visualizer;

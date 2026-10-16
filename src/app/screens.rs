@@ -10,7 +10,8 @@ use super::panel::rgb32;
 use super::{ACCENT, App, ColourTab, EditTarget, Editor, LED_GREEN, LED_RED, Screen, Settings};
 use crate::colour::{Hs, Rgb};
 use crate::effects::{
-    self, CHASE_PAGES, PATTERN_PAGES, chase_page, chase_preview, pattern_page, pattern_preview,
+    self, BUTTONS_PER_PAGE, CHASE_PAGES, INTENSITY_PAGE, PATTERN_PAGES, SWATCH_PAGES, chase_page,
+    chase_preview, pattern_page, pattern_preview,
 };
 use crate::engine::{
     CHANNELS, Cell, ChannelOut, Crossfade, CueStart, Desk, Direction, Item, Look, PlayRef,
@@ -95,6 +96,7 @@ fn cell_out(cell: &Cell) -> ChannelOut {
         hs,
         rgb: hs.rgb(),
         alt: cell.alt,
+        pos: cell.pos,
     }
 }
 
@@ -161,9 +163,121 @@ fn look_icons(ui: &mut Ui, d: &Desk, look: &Look) {
 }
 
 fn all_fixtures(show: &Show) -> Vec<FixtureDef> {
-    let mut v = library();
+    let mut v = library().to_vec();
     v.extend(show.my_fixtures.iter().cloned());
     v
+}
+
+/// "Maker · Name · 10ch" without repeating what the name already says.
+fn fixture_label(f: &FixtureDef) -> String {
+    let mut s = if f.manufacturer == "Generic" {
+        f.name.clone()
+    } else {
+        format!("{} · {}", f.manufacturer, f.name)
+    };
+    let ch = format!("{}ch", f.footprint());
+    if !f.name.ends_with(&ch) {
+        s += &format!(" · {ch}");
+    }
+    s
+}
+
+/// Search state for the fixture browser.
+#[derive(Default)]
+pub(crate) struct Browser {
+    pub query: String,
+    pub maker: String,
+}
+
+/// A searchable list of fixtures; returns the index clicked.
+fn fixture_browser(
+    ui: &mut Ui,
+    id: &str,
+    fixtures: &[FixtureDef],
+    b: &mut Browser,
+    selected: Option<usize>,
+) -> Option<usize> {
+    let mut makers: Vec<&str> = Vec::new();
+    for f in fixtures {
+        if !makers.contains(&f.manufacturer.as_str()) {
+            makers.push(&f.manufacturer);
+        }
+    }
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt((id, "maker"))
+            .width(130.0)
+            .selected_text(if b.maker.is_empty() {
+                "All makers"
+            } else {
+                &b.maker
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut b.maker, String::new(), "All makers");
+                for m in &makers {
+                    ui.selectable_value(&mut b.maker, m.to_string(), *m);
+                }
+            });
+        ui.add(
+            egui::TextEdit::singleline(&mut b.query)
+                .hint_text("Search: name, RGBW, 7x18, moving…")
+                .desired_width(220.0),
+        );
+        if !b.query.is_empty() && ui.small_button("x").clicked() {
+            b.query.clear();
+        }
+    });
+    let words: Vec<String> = b
+        .query
+        .to_lowercase()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    let matches: Vec<usize> = fixtures
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| b.maker.is_empty() || f.manufacturer == b.maker)
+        .filter(|(_, f)| {
+            let hay = format!(
+                "{} {} {}{}",
+                f.manufacturer,
+                f.name,
+                f.summary(),
+                if f.is_mover() { " moving head" } else { "" }
+            )
+            .to_lowercase();
+            words.iter().all(|w| hay.contains(w.as_str()))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    ui.label(
+        RichText::new(format!("{} of {} fixtures", matches.len(), fixtures.len()))
+            .small()
+            .weak(),
+    );
+    let mut clicked = None;
+    egui::ScrollArea::vertical()
+        .id_salt((id, "list"))
+        .max_height(230.0)
+        .min_scrolled_height(230.0)
+        .auto_shrink([false, true])
+        .show_rows(ui, 18.0, matches.len(), |ui, rows| {
+            for &i in &matches[rows] {
+                let f = &fixtures[i];
+                let text = RichText::new(if f.manufacturer == "Generic" {
+                    format!("Generic · {}", fixture_label(f))
+                } else {
+                    fixture_label(f)
+                });
+                if ui
+                    .selectable_label(selected == Some(i), text)
+                    .on_hover_text(f.summary())
+                    .clicked()
+                {
+                    clicked = Some(i);
+                }
+            }
+        });
+    clicked
 }
 
 /// The lowest address with `footprint` free channels, ignoring channel `skip`.
@@ -339,33 +453,67 @@ impl App {
         let current = match self.colour_tab {
             ColourTab::Swatches => 0,
             ColourTab::Picker | ColourTab::Sliders => 1,
-            ColourTab::Patterns => 2,
-            ColourTab::Chases => 3,
+            ColourTab::Library => 2,
+            ColourTab::Patterns => 3,
+            ColourTab::Chases => 4,
         };
-        let pattern_label = format!("Patterns · {}", PATTERN_PAGES[self.pattern_page]);
-        let chase_label = format!("Chases · {}", CHASE_PAGES[self.chase_page]);
         if let Some(i) = tabs(
             ui,
             current,
-            &["Swatches", "Colours", &pattern_label, &chase_label],
+            &["Swatches", "Colours", "Library", "Patterns", "Chases"],
         ) {
             // Pressing the current tab again moves on, like the console's buttons.
             self.colour_tab = match (i, self.colour_tab) {
+                (0, ColourTab::Swatches) => {
+                    self.swatch_page = (self.swatch_page + 1) % SWATCH_PAGES;
+                    ColourTab::Swatches
+                }
                 (0, _) => ColourTab::Swatches,
                 (1, ColourTab::Picker) => ColourTab::Sliders,
                 (1, ColourTab::Sliders) => ColourTab::Picker,
                 (1, _) => ColourTab::Picker,
-                (2, ColourTab::Patterns) => {
+                (2, _) => ColourTab::Library,
+                (3, ColourTab::Patterns) => {
                     self.pattern_page = (self.pattern_page + 1) % PATTERN_PAGES.len();
                     ColourTab::Patterns
                 }
-                (2, _) => ColourTab::Patterns,
-                (3, ColourTab::Chases) => {
+                (3, _) => ColourTab::Patterns,
+                (4, ColourTab::Chases) => {
                     self.chase_page = (self.chase_page + 1) % CHASE_PAGES.len();
                     ColourTab::Chases
                 }
                 _ => ColourTab::Chases,
             };
+        }
+        // Page buttons.
+        let pages: Option<(Vec<String>, &mut usize)> = match self.colour_tab {
+            ColourTab::Swatches => Some((
+                (1..=SWATCH_PAGES).map(|p| format!("Page {p}")).collect(),
+                &mut self.swatch_page,
+            )),
+            ColourTab::Patterns => Some((
+                PATTERN_PAGES.iter().map(|s| s.to_string()).collect(),
+                &mut self.pattern_page,
+            )),
+            ColourTab::Chases => Some((
+                CHASE_PAGES.iter().map(|s| s.to_string()).collect(),
+                &mut self.chase_page,
+            )),
+            _ => None,
+        };
+        if let Some((names, page)) = pages {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                for (i, name) in names.iter().enumerate() {
+                    if ui
+                        .selectable_label(*page == i, RichText::new(name).size(11.0))
+                        .clicked()
+                    {
+                        *page = i;
+                    }
+                }
+            });
+            ui.add_space(2.0);
         }
         let n = d.selected_channels().len();
         ui.horizontal(|ui| {
@@ -390,10 +538,12 @@ impl App {
         let size = vec2(92.0, 58.0);
         match self.colour_tab {
             ColourTab::Swatches => {
-                for row in d.show.swatches.clone().chunks(6).enumerate() {
+                let first = self.swatch_page * BUTTONS_PER_PAGE;
+                let swatches: Vec<Rgb> = d.show.swatches[first..first + BUTTONS_PER_PAGE].to_vec();
+                for (row, chunk) in swatches.chunks(6).enumerate() {
                     ui.horizontal(|ui| {
-                        for (j, c) in row.1.iter().enumerate() {
-                            let i = row.0 * 6 + j;
+                        for (j, c) in chunk.iter().enumerate() {
+                            let i = first + row * 6 + j;
                             let r = colour_button(ui, &[rgb32(*c)], "", size)
                                 .on_hover_text("Click to apply · right-click to replace");
                             if r.clicked() {
@@ -415,17 +565,47 @@ impl App {
                                     self.picker = *c;
                                     ui.close();
                                 }
+                                if ui.button("Restore the default").clicked() {
+                                    d.checkpoint();
+                                    d.show.swatches[i] = effects::DEFAULT_SWATCHES[i];
+                                    ui.close();
+                                }
                             });
                         }
                     });
                 }
                 ui.label(
                     RichText::new(
-                        "To change a swatch, choose a colour in Colours, then right-click the swatch.",
+                        "To change a swatch, choose a colour in Colours or Library, then right-click the swatch.",
                     )
                     .small()
                     .weak(),
                 );
+            }
+            ColourTab::Library => {
+                for group in effects::library_groups() {
+                    ui.label(RichText::new(group).strong());
+                    ui.horizontal_wrapped(|ui| {
+                        for c in effects::LIBRARY.iter().filter(|c| c.group == group) {
+                            let r = colour_button(ui, &[rgb32(c.rgb)], c.name, vec2(92.0, 40.0))
+                                .on_hover_text(format!(
+                                    "{} · click to apply, right-click to use as the picker colour",
+                                    c.name
+                                ));
+                            if r.clicked() {
+                                d.apply_colour(c.rgb);
+                                self.picker = c.rgb;
+                            }
+                            r.context_menu(|ui| {
+                                if ui.button("Use as picker colour").clicked() {
+                                    self.picker = c.rgb;
+                                    ui.close();
+                                }
+                            });
+                        }
+                    });
+                    ui.add_space(4.0);
+                }
             }
             ColourTab::Picker => {
                 let w = ui.available_width().min(560.0);
@@ -509,12 +689,8 @@ impl App {
                         for p in row {
                             let colours: Vec<Color32> =
                                 pattern_preview(*p).into_iter().map(rgb32).collect();
-                            let label = if *p == effects::Pattern::Rainbow {
-                                "Rainbow"
-                            } else {
-                                ""
-                            };
-                            if colour_button(ui, &colours, label, size).clicked() {
+                            let name = effects::pattern_name(*p);
+                            if colour_button(ui, &colours, &name, size).clicked() {
                                 d.apply_pattern(*p);
                             }
                         }
@@ -522,9 +698,12 @@ impl App {
                 }
                 ui.label(
                     RichText::new(match self.pattern_page {
-                        0 => "One colour on odd channels, the other on even.",
-                        1 => "One colour on the first half of the selection, the other on the second.",
-                        _ => "One colour at both ends crossfading to the other in the centre.",
+                        0 | 1 => "One colour on odd channels, the other on even.",
+                        2 | 3 => "One colour on the first half of the selection, the other on the second.",
+                        4 | 5 => "One colour at both ends crossfading to the other in the centre.",
+                        6 | 7 => "One colour fading to the other from the first fixture to the last.",
+                        8 => "Three colours repeating along the selection.",
+                        _ => "Rainbows and palettes spread across the selection.",
                     })
                     .small()
                     .weak(),
@@ -532,12 +711,13 @@ impl App {
             }
             ColourTab::Chases => {
                 let chases = chase_page(self.chase_page);
+                let named = matches!(self.chase_page, 0 | 1) || self.chase_page == INTENSITY_PAGE;
                 for row in chases.chunks(6) {
                     ui.horizontal(|ui| {
                         for c in row {
                             let colours: Vec<Color32> =
                                 chase_preview(*c).into_iter().map(rgb32).collect();
-                            let label = if self.chase_page == 0 {
+                            let label = if named {
                                 effects::chase_name(*c)
                             } else {
                                 String::new()
@@ -551,9 +731,20 @@ impl App {
                         }
                     });
                 }
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(if self.chase_page == INTENSITY_PAGE {
+                        "Intensity effects bring their own levels (highest takes precedence): \
+                         pull the selection's faders down, colour stays as it is."
+                    } else {
+                        "Colour chases leave intensity to the faders."
+                    })
+                    .small()
+                    .weak(),
+                );
                 ui.add_space(6.0);
                 if !d.prog.chases.is_empty() {
-                    ui.label(RichText::new("Running colour chases").strong());
+                    ui.label(RichText::new("Running chases").strong());
                     let mut release = None;
                     for (i, (c, _)) in d.prog.chases.iter().enumerate() {
                         ui.horizontal(|ui| {
@@ -1304,6 +1495,7 @@ impl App {
                         level: Some(o.level),
                         colour: Some(o.hs),
                         alt: o.alt,
+                        pos: o.pos,
                     };
                     r.on_hover_text(cell_detail(d, ch, &cell));
                 }
@@ -1465,8 +1657,7 @@ impl App {
                     }
                     match &mut d.show.patch[ch] {
                         Some(p) => {
-                            let name =
-                                RichText::new(format!("{} · {}ch", p.def.name, p.def.footprint()));
+                            let name = RichText::new(fixture_label(&p.def));
                             ui.label(if bad { name.color(LED_RED) } else { name })
                                 .on_hover_text(if bad {
                                     "Overlaps another fixture or runs past 512"
@@ -1498,33 +1689,12 @@ impl App {
             let current = d.show.patch[ch]
                 .as_ref()
                 .map_or("Not patched".into(), |p| p.def.name.clone());
-            let mut choice = None;
-            egui::ComboBox::from_id_salt("patch_type")
-                .width(240.0)
-                .selected_text(current)
-                .show_ui(ui, |ui| {
-                    let mut last = String::new();
-                    for (i, f) in fixtures.iter().enumerate() {
-                        if f.manufacturer != last {
-                            ui.label(RichText::new(&f.manufacturer).strong());
-                            last = f.manufacturer.clone();
-                        }
-                        if ui
-                            .selectable_label(false, format!("  {}", f.name))
-                            .clicked()
-                        {
-                            choice = Some(i);
-                        }
-                    }
-                });
-            if let Some(i) = choice {
-                d.checkpoint();
-                let def = fixtures[i].clone();
-                let addr = free_address(&d.show, def.footprint(), Some(ch));
-                d.show.patch[ch] = Some(Patched {
-                    def,
-                    addresses: vec![addr],
-                });
+            ui.label(RichText::new(current).strong());
+            if ui
+                .selectable_label(self.browse_patch, "Choose fixture…")
+                .clicked()
+            {
+                self.browse_patch = !self.browse_patch;
             }
             let patched = d.show.patch[ch].is_some();
             if ui.add_enabled(patched, egui::Button::new("Copy")).clicked() {
@@ -1556,6 +1726,26 @@ impl App {
                 d.show.patch[ch] = None;
             }
         });
+        if self.browse_patch {
+            ui.add_space(4.0);
+            egui::Frame::new()
+                .fill(Color32::from_gray(24))
+                .inner_margin(6.0)
+                .show(ui, |ui| {
+                    if let Some(i) =
+                        fixture_browser(ui, "patch", &fixtures, &mut self.browser, None)
+                    {
+                        d.checkpoint();
+                        let def = fixtures[i].clone();
+                        let addr = free_address(&d.show, def.footprint(), Some(ch));
+                        d.show.patch[ch] = Some(Patched {
+                            def,
+                            addresses: vec![addr],
+                        });
+                        self.browse_patch = false;
+                    }
+                });
+        }
         if let Some(p) = &mut d.show.patch[ch] {
             ui.add_space(4.0);
             ui.label(
@@ -1597,21 +1787,13 @@ impl App {
             .spacing([12.0, 8.0])
             .show(ui, |ui| {
                 ui.label("Fixture");
-                egui::ComboBox::from_id_salt("wiz_fixture")
-                    .width(260.0)
-                    .selected_text(format!(
+                ui.label(
+                    RichText::new(format!(
                         "{} · {}",
                         fixtures[w.fixture].manufacturer, fixtures[w.fixture].name
                     ))
-                    .show_ui(ui, |ui| {
-                        for (i, f) in fixtures.iter().enumerate() {
-                            ui.selectable_value(
-                                &mut w.fixture,
-                                i,
-                                format!("{} · {}", f.manufacturer, f.name),
-                            );
-                        }
-                    });
+                    .strong(),
+                );
                 ui.end_row();
                 ui.label("Quantity");
                 ui.add(egui::DragValue::new(&mut w.quantity).range(1..=CHANNELS));
@@ -1638,6 +1820,12 @@ impl App {
                 });
                 ui.end_row();
             });
+        if let Some(i) =
+            fixture_browser(ui, "wizard", &fixtures, &mut self.browser, Some(w.fixture))
+        {
+            w.fixture = i;
+        }
+        ui.add_space(4.0);
         let def = &fixtures[w.fixture];
         let step = if w.offset == 0 {
             def.footprint()
@@ -1675,33 +1863,32 @@ impl App {
     fn patch_library(&mut self, ui: &mut Ui, d: &mut Desk) {
         let generic = library();
         let fixtures = all_fixtures(&d.show);
-        ui.label(RichText::new("Generic").strong());
-        for (i, f) in fixtures.iter().enumerate() {
-            if i == generic.len() {
-                ui.add_space(4.0);
-                ui.label(RichText::new("My Fixtures").strong());
-            }
-            let text = format!(
-                "{} · {}",
-                f.name,
-                f.channels
-                    .iter()
-                    .map(|c| if c.fine {
-                        format!("{}f", c.feature.short())
-                    } else {
-                        c.feature.short().to_string()
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            );
-            if ui.selectable_label(self.lib_sel == Some(i), text).clicked() {
-                self.lib_sel = Some(i);
-            }
+        ui.label(
+            RichText::new(format!(
+                "{} built-in fixture modes (Generic, manufacturers' manuals and the Open Fixture \
+                 Library) and {} in My Fixtures, saved with the show.",
+                generic.len(),
+                fixtures.len() - generic.len()
+            ))
+            .small()
+            .weak(),
+        );
+        if let Some(i) = fixture_browser(ui, "library", &fixtures, &mut self.browser, self.lib_sel)
+        {
+            self.lib_sel = Some(i);
         }
-        if fixtures.len() == generic.len() {
-            ui.label(
-                RichText::new("  (none yet: Copy a generic fixture or start a New one)").weak(),
-            );
+        if let Some(f) = self.lib_sel.and_then(|i| fixtures.get(i)) {
+            ui.add_space(4.0);
+            ui.label(RichText::new(format!("{} · {}", f.manufacturer, f.name)).strong());
+            ui.horizontal_wrapped(|ui| {
+                for (n, c) in f.channels.iter().enumerate() {
+                    ui.label(
+                        RichText::new(format!("{} {}", n + 1, c.display()))
+                            .small()
+                            .monospace(),
+                    );
+                }
+            });
         }
         ui.add_space(6.0);
         let sel = self.lib_sel.filter(|&i| i < fixtures.len());
@@ -1751,11 +1938,47 @@ impl App {
                 self.lib_sel = None;
             }
         });
+        ui.add_space(8.0);
+        ui.label(RichText::new("Import from the Open Fixture Library").strong());
         ui.label(
-            RichText::new("My Fixtures are saved in the show file.")
-                .small()
-                .weak(),
+            RichText::new(
+                "Download a fixture's .json from open-fixture-library.org (or its GitHub \
+                 repository) and give its path here. Each DMX mode becomes a fixture in My Fixtures.",
+            )
+            .small()
+            .weak(),
         );
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.import_path)
+                    .hint_text("/path/to/fixture.json")
+                    .desired_width(300.0),
+            );
+            if ui.button("Import").clicked() {
+                self.status = match self.import_fixture(d) {
+                    Ok(n) => format!("Imported {n} fixture mode(s) into My Fixtures"),
+                    Err(e) => format!("Import failed: {e}"),
+                };
+            }
+        });
+    }
+
+    fn import_fixture(&mut self, d: &mut Desk) -> Result<usize, String> {
+        let path = std::path::PathBuf::from(self.import_path.trim());
+        let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        // OFL keeps fixtures in a folder named after the manufacturer.
+        let maker = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|m| crate::ofl::manufacturer_from_key(&m.to_string_lossy()))
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| "Imported".into());
+        let fixtures = crate::ofl::convert(&text, &maker)?;
+        let n = fixtures.len();
+        d.checkpoint();
+        d.show.my_fixtures.extend(fixtures);
+        self.lib_sel = Some(library().len() + d.show.my_fixtures.len() - 1);
+        Ok(n)
     }
 
     fn fixture_editor(&mut self, ui: &mut Ui, d: &mut Desk) {
@@ -2446,7 +2669,10 @@ fn help(ui: &mut Ui) {
 const HELP: &str = "\
 PATCH: open Patch and give each of the 24 fixture channels a fixture type and DMX address \
 (the Wizard patches a row of the same fixture at once). Channels 1-12 are the Black page, \
-13-24 the White page; PAGE switches the 12 strips between them.
+13-24 the White page; PAGE switches the 12 strips between them. The library has about 630 \
+fixture modes (Generic, Shehds, Chauvet DJ, ADJ, Cameo, Eurolite, Stairville, Showtec and \
+more): search it by name, maker or channels (\"7x18\", \"RGBWA\", \"moving\"). Library → \
+Import adds any fixture file from the Open Fixture Library.
 
 FIXTURE STRIPS
 • Fader: intensity. A red fader cap is gated: move it to the output level to take control.
@@ -2456,14 +2682,19 @@ Turning the dials of any selected fixture changes them all. Click fixtures on st
 • Hue dial: drag to turn, click to step through six colours (saturation goes to full). \
 On cool/warm white fixtures it sets colour temperature.
 • Saturation dial: drag to turn, click for full / 50% / white.
-• SHIFT + dials: the alternate features (Shift+Hue: zoom, Shift+Sat: strobe by default). \
+• SHIFT + dials: the alternate features (Shift+Hue: zoom or UV, Shift+Sat: strobe by default). \
 Double-click SHIFT to fan the dials across the selection.
+• POSITION + dials: moving heads. Hue pans, Saturation tilts, clicking a dial re-homes it. \
+Fan works here too, for spreading a row of movers.
 
 CLEAR: click whites the selection, double-click whites everything, triple-click clears all \
 intensity and colour. SHIFT + CLEAR resets the panel. UNDO reverts the last change.
 
-COLOUR WINDOW: swatches, a colour picker and RGB sliders, three pages of two-colour patterns \
-and four pages of colour chases, applied to the selection.
+COLOUR WINDOW: three pages of swatches, a colour picker and RGB sliders, a library of 80+ \
+named colours, ten pages of patterns (odds & evens, halves, crossfades, gradients, thirds, \
+rainbows and palettes) and twelve pages of chases, applied to the selection. Colour chases \
+leave intensity to the faders; the Intensity page (comet, Knight Rider, pulse, flicker…) \
+brings its own levels, so pull those faders down.
 
 RECORD: press RECORD (channels above 0% are included; select buttons toggle them), then:
 • a Scene button → a scene
@@ -2484,4 +2715,5 @@ SNAPSHOT freezes the output while you build the next look; press again to crossf
 Grand Master scales everything; DBO is a blackout while held.
 
 KEYS: Space cuelist Go · R record · Esc cancel · Ctrl+Z undo · S snapshot · T sync · \
-M beat (audio chases) · Tab page · 1-4 scenes · 5-8 chases · hold B blackout · hold Shift for Shift.";
+M beat (audio chases) · P position · Tab page · 1-4 scenes · 5-8 chases · hold B blackout · \
+hold Shift for Shift.";

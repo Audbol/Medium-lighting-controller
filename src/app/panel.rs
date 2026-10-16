@@ -5,7 +5,7 @@ use eframe::egui::{
     pos2, vec2,
 };
 
-use super::{ACCENT, App, KEY, KEY_HOVER, LED_BLUE, LED_RED, PANEL};
+use super::{ACCENT, App, KEY, KEY_HOVER, LED_BLUE, LED_GREEN, LED_RED, PANEL};
 use crate::colour::Rgb;
 use crate::engine::{
     DEFAULT_FADE, Desk, DialKind, FaderMode, Item, Led, PAGE_NAMES, PlayRef, STRIPS, Slot,
@@ -262,7 +262,11 @@ impl App {
             let kind = d.colour_kind(ch);
             ui.horizontal(|ui| {
                 for dial in [DialKind::Hue, DialKind::Sat] {
-                    let (value, ring) = if d.shift {
+                    let (value, ring) = if d.position {
+                        let i = if dial == DialKind::Hue { 0 } else { 1 };
+                        let v = o.pos[i].unwrap_or_else(|| d.pos_home(ch, i));
+                        (v, Color32::from_rgb(40, 170, 150))
+                    } else if d.shift {
                         let a = if dial == DialKind::Hue { 0 } else { 1 };
                         let v = o.alt[a].unwrap_or_else(|| d.alt_home(ch, a));
                         (v, Color32::from_rgb(120, 90, 200))
@@ -280,7 +284,18 @@ impl App {
                         }
                     };
                     let r = knob(ui, value, ring, DIAL);
+                    let patched = d.show.patched(ch);
+                    let pos_tip = |i: usize| {
+                        format!(
+                            "Position + {}: {} (click to re-home)",
+                            if i == 0 { "Hue" } else { "Sat" },
+                            patched
+                                .and_then(|p| p.def.pos_name(i))
+                                .unwrap_or("nothing assigned".into())
+                        )
+                    };
                     let tip = match (d.shift, dial) {
+                        _ if d.position => pos_tip(if dial == DialKind::Hue { 0 } else { 1 }),
                         (true, DialKind::Hue) => format!(
                             "Shift+Hue: {}",
                             d.show
@@ -322,9 +337,16 @@ impl App {
                 }
             });
             ui.horizontal(|ui| {
-                small(ui, if d.shift { "Shft H" } else { "Hue" });
+                let (h, s) = if d.position {
+                    ("Pan", "Tilt")
+                } else if d.shift {
+                    ("Shft H", "Shft S")
+                } else {
+                    ("Hue", "Sat")
+                };
+                small(ui, h);
                 ui.add_space(4.0);
-                small(ui, if d.shift { "Shft S" } else { "Sat" });
+                small(ui, s);
             });
 
             // Colour mimic and Select.
@@ -462,6 +484,15 @@ impl App {
             .clicked()
             {
                 d.press_snapshot();
+            }
+            if key(ui, "POSITION", d.position.then_some(LED_GREEN), k)
+                .on_hover_text(
+                    "The dials move moving heads: Hue → pan, Saturation → tilt. \
+                     Click a dial to re-home it. Works with Fan (P)",
+                )
+                .clicked()
+            {
+                d.position = !d.position;
             }
         });
 
