@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Stage-Lite
+Comment=HSI lighting console for LED rigs with Art-Net and sACN
+Exec=stage-lite
+Terminal=false
+Categories=AudioVideo;Utility;
